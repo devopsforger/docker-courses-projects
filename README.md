@@ -11,6 +11,7 @@ The projects are organized by course, with each course providing progressively c
 | Course | Description | Projects |
 |---|---|---|
 | [DOC-301: Docker & Containerization (Beginner)](doc-301/README.md) | Learn Docker fundamentals, build and manage containers, configure networking and storage, and deploy containerized applications. | 8 |
+| [DOC-302: Docker & Containerization (Advanced)](doc-302/README.md) | Deep dive into Docker internals, storage drivers, networking internals, BuildKit, advanced Compose, image optimization, monitoring, debugging, and production-grade container techniques. | 9 |
 
 Additional courses and projects will be added as they become available.
 
