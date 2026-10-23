@@ -1,3 +1,130 @@
+# Project 06: Deploy a Multi-Container Application with Docker Compose — Detailed Reference Solution
+
+**Course:** DOC-301 — Docker & Containerization  
+**Source verification:** Paired against uploaded Project 06 requirements and uploaded original Project 06 reference solution.  
+**Scope:** Beginner-friendly Bash/POSIX-shell walkthrough; commands are illustrative until run on a Docker host.
+
+## What you are building
+
+Your team is tired of copying long `docker run` commands. Turn the API/database deployment into a repeatable Compose application.
+
+## Requirement-by-requirement coverage
+
+| # | Published requirement | Where it is demonstrated |
+|---|---|---|
+| 1 | Write `compose.yaml` defining `api` and `db` services. | Guided implementation / investigation below; see verification checklist |
+| 2 | Build the API image from the supplied application and improved Dockerfile. | Guided implementation / investigation below; see verification checklist |
+| 3 | Give PostgreSQL a named volume and a database healthcheck. | Guided implementation / investigation below; see verification checklist |
+| 4 | Configure the API to wait for the database to become healthy using Compose dependencies. | Guided implementation / investigation below; see verification checklist |
+| 5 | Publish only the API port to the host. | Guided implementation / investigation below; see verification checklist |
+| 6 | Create and list tasks, restart services, and verify persistence. | Guided implementation / investigation below; see verification checklist |
+| 7 | Demonstrate `docker compose up`, `ps`, `logs`, and `down`. | Guided implementation / investigation below; see verification checklist |
+
+## Guided implementation and explanations
+
+### Step 1: Assemble the Compose project
+
+Place the supplied `app.py`, `requirements.txt`, the improved Project 3 `Dockerfile`, and `.dockerignore` in one directory. Create `compose.yaml`:
+
+```yaml
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: taskuser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: tasks
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskuser -d tasks"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://taskuser:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/tasks
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  pgdata:
+```
+
+`services` defines the two containers. `image` selects PostgreSQL 17; `build: .` builds the API from the current directory. `environment` passes settings at runtime. The `${NAME:?message}` expression stops Compose configuration when the variable is missing. `volumes` attaches persistent storage; the top-level declaration tells Compose to manage it. The database healthcheck runs `pg_isready` inside the database container. `depends_on` with `service_healthy` waits for a passing database healthcheck before creating the API. `ports` publishes only the API. Compose automatically creates a project network and resolves the service name `db` through DNS.
+
+### Step 2: Supply a local-only password
+
+Create `.env.example`:
+
+```dotenv
+POSTGRES_PASSWORD=REPLACE_WITH_A_STRONG_ALPHANUMERIC_PASSWORD
+```
+
+Copy it to `.env` and replace the example value. Add `.env` to `.gitignore` and `.dockerignore`. Use an alphanumeric training password to avoid URL encoding problems. A Compose `.env` file is for variable interpolation, not production-grade secret management; environment values can be inspected by administrators with Docker access.
+
+### Step 3: Validate and deploy
+
+```bash
+docker compose version
+docker compose config --quiet
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=50 db api
+```
+
+`config --quiet` checks the Compose file and required interpolation variables without printing the expanded configuration (which could expose the password). `up -d --build` builds the API and starts services in the background. `ps` shows service state; `logs` helps confirm readiness. Do not submit unredacted logs containing secrets.
+
+### Step 4: Create data, remove containers, and restore
+
+```bash
+curl -fsS http://localhost:8000/health
+curl -i -X POST http://localhost:8000/tasks -H 'Content-Type: application/json' -d '{"title":"Compose task"}'
+curl -fsS http://localhost:8000/tasks
+docker compose port api 8000
+docker compose down
+docker compose up -d
+curl -fsS http://localhost:8000/tasks
+docker compose ps
+```
+
+The task should remain after `down` and `up -d`, because `down` removes containers and the Compose network but **not** the named volume by default. `docker compose port api 8000` reports the API's published host port. The `db` service must have no `ports:` entry. Never use `docker compose down -v` during persistence verification because `-v` removes named volumes declared by the Compose project.
+
+### Step 5: Demonstrate lifecycle and cleanup
+
+```bash
+docker compose stop
+docker compose start
+docker compose ps
+docker compose down
+```
+
+`stop` halts existing service containers without deleting them; `start` restarts those containers. `down` removes containers and networks while preserving the named database volume. Include the Compose file, `.env.example`, Dockerfile, README, and redacted verification outputs in your submission.
+
+## Acceptance criteria to verify
+
+- [ ] `docker compose config` validates the configuration.
+- [ ] API requests succeed after database startup.
+- [ ] Database records survive `docker compose down` followed by `up -d`.
+- [ ] The database has no published host port.
+
+## Constraints from the project
+
+- Do not commit `.env` or credentials.
+- Use Compose service names for inter-service DNS.
+- Do not publish the database port.
+- Do not run `docker compose down -v` during persistence verification.
+
+## Required deliverables
+
+- `compose.yaml`, Dockerfile, `.env.example`, README, and terminal/API verification output.
+
+## Original reference solution, retained for comparison
+
 # Project 06: Deploy a Multi-Container Application with Docker Compose — Reference Solution
 
 **Course:** DOC-301 — Docker & Containerization  

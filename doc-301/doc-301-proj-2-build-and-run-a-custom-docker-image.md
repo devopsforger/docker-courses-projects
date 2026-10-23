@@ -1,3 +1,95 @@
+# Project 02: Build and Run a Custom Docker Image — Detailed Reference Solution
+
+**Course:** DOC-301 — Docker & Containerization  
+**Source verification:** Paired against uploaded Project 02 requirements and uploaded original Project 02 reference solution.  
+**Scope:** Beginner-friendly Bash/POSIX-shell walkthrough; commands are illustrative until run on a Docker host.
+
+## What you are building
+
+Your team has provided a simple Task Management API. Package it so anyone with Docker can run it without installing Python locally.
+
+## Requirement-by-requirement coverage
+
+| # | Published requirement | Where it is demonstrated |
+|---|---|---|
+| 1 | Use the supplied `app.py` and `requirements.txt` from the shared starter application. | Guided implementation / investigation below; see verification checklist |
+| 2 | Write a Dockerfile that installs dependencies and starts the API. | Guided implementation / investigation below; see verification checklist |
+| 3 | Build an image tagged `doc301-task-api:1.0`. | Guided implementation / investigation below; see verification checklist |
+| 4 | Run a container named `doc301-api` and publish host port 8000. | Guided implementation / investigation below; see verification checklist |
+| 5 | Verify the `/health` and `/tasks` endpoints; explain why creating tasks is not yet available. | Guided implementation / investigation below; see verification checklist |
+
+## Guided implementation and explanations
+
+### Step 1: Prepare the supplied application
+
+Create a project directory and put the **supplied** `app.py` and `requirements.txt` in it. The exact starter source is reproduced in the original reference solution below. The application defines `GET /health`, `GET /tasks`, and `POST /tasks`. Without `DATABASE_URL`, the first returns `{"status":"ok"}`, the second returns `[]`, and task creation returns HTTP 503. That is expected, because this project does not deploy a database.
+
+### Step 2: Write the Dockerfile
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app.py ./
+EXPOSE 8000
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+`FROM` chooses a Python runtime image. `WORKDIR` sets `/app` as the directory for subsequent instructions. `COPY requirements.txt` copies dependencies from the build context. `RUN` installs dependencies **at build time**, producing an image layer. `--no-cache-dir` prevents pip from retaining its package-download cache. `COPY app.py` adds the application. `EXPOSE` documents port 8000 but does **not** make it accessible from the host. `CMD` supplies the default container startup command. `app:app` means the `app` FastAPI object in the `app.py` module. `0.0.0.0` listens on the container's interfaces rather than only its loopback interface.
+
+### Step 3: Build and inspect the image
+
+```bash
+docker build -t doc301-task-api:1.0 .
+docker image ls doc301-task-api
+docker history doc301-task-api:1.0
+docker image inspect doc301-task-api:1.0 --format '{{json .Config.Cmd}}'
+```
+
+`-t` sets the required repository and version tag. The final `.` is the **build context**, the directory Docker can read for `COPY`. `docker history` illustrates layers. Copying requirements before source means changing `app.py` does not automatically invalidate the dependency installation layer.
+
+### Step 4: Run and verify
+
+```bash
+docker run -d --name doc301-api -p 8000:8000 doc301-task-api:1.0
+docker ps
+docker logs --tail=30 doc301-api
+curl -fsS http://localhost:8000/health
+curl -fsS http://localhost:8000/tasks
+curl -i -X POST http://localhost:8000/tasks -H 'Content-Type: application/json' -d '{"title":"First task"}'
+```
+
+Expect the health JSON, an empty array, and an HTTP **503** for POST. `curl -f` fails on HTTP errors, so the POST demonstration intentionally uses `-i` instead. Uvicorn startup should appear in logs. If the container exits, read `docker logs doc301-api` before recreating it.
+
+### Step 5: Prove reproducibility and clean up
+
+```bash
+docker rm -f doc301-api
+docker build -t doc301-task-api:1.0 .
+```
+
+A fresh build from the submitted `Dockerfile`, `app.py`, and `requirements.txt` should succeed without installing Python on the host. Keep the image for Project 3. Include command output and a short explanation of the missing database in your README.
+
+## Acceptance criteria to verify
+
+- [ ] `GET /health` returns `{"status":"ok"}`.
+- [ ] `GET /tasks` returns `[]` before a database is configured.
+- [ ] Container logs show Uvicorn running.
+- [ ] The image can be rebuilt from the submitted files.
+
+## Constraints from the project
+
+- No local Python installation should be required for execution.
+- Do not embed credentials or install a database in the API image.
+- Keep the API listening on `0.0.0.0` inside the container.
+
+## Required deliverables
+
+- Dockerfile, supplied app files, build/run commands, and HTTP verification evidence.
+
+## Original reference solution, retained for comparison
+
 # Project 02: Build and Run a Custom Docker Image — Reference Solution
 
 **Course:** DOC-301 — Docker & Containerization  

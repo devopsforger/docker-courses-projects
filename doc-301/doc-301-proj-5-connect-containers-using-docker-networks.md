@@ -1,3 +1,107 @@
+# Project 05: Connect Containers Using Docker Networks — Detailed Reference Solution
+
+**Course:** DOC-301 — Docker & Containerization  
+**Source verification:** Paired against uploaded Project 05 requirements and uploaded original Project 05 reference solution.  
+**Scope:** Beginner-friendly Bash/POSIX-shell walkthrough; commands are illustrative until run on a Docker host.
+
+## What you are building
+
+The API and database are running in separate containers. Make them communicate over a private Docker network without exposing PostgreSQL to the host.
+
+## Requirement-by-requirement coverage
+
+| # | Published requirement | Where it is demonstrated |
+|---|---|---|
+| 1 | Create a user-defined bridge network `doc301-net`. | Guided implementation / investigation below; see verification checklist |
+| 2 | Run a PostgreSQL container named `doc301-db` on that network with a named volume. | Guided implementation / investigation below; see verification checklist |
+| 3 | Run the API image on the same network, configured to connect to host `doc301-db`. | Guided implementation / investigation below; see verification checklist |
+| 4 | Create a task through the API and retrieve it. | Guided implementation / investigation below; see verification checklist |
+| 5 | Prove that container DNS works and that PostgreSQL does not require a host port mapping. | Guided implementation / investigation below; see verification checklist |
+| 6 | Explain why `localhost` is not the database hostname inside the API container. | Guided implementation / investigation below; see verification checklist |
+
+## Guided implementation and explanations
+
+### Step 1: Create an isolated user-defined bridge network
+
+```bash
+docker network create --driver bridge doc301-net
+docker network inspect doc301-net
+docker volume create doc301-net-pgdata
+read -rsp 'Training database password (alphanumeric): ' POSTGRES_PASSWORD; echo
+export POSTGRES_PASSWORD
+```
+
+A user-defined bridge network allows containers on it to resolve one another by name through Docker's embedded DNS. `--driver bridge` makes the network type explicit. The separate named volume prevents collisions with Project 4. Use an alphanumeric training password because it will be placed in a PostgreSQL connection URL; other characters may need percent encoding.
+
+### Step 2: Start the database without publishing it
+
+```bash
+docker run -d --name doc301-db --network doc301-net \
+  -e POSTGRES_USER=taskuser -e POSTGRES_DB=tasks \
+  -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  -v doc301-net-pgdata:/var/lib/postgresql/data postgres:17
+until docker exec doc301-db pg_isready -U taskuser -d tasks; do sleep 2; done
+```
+
+`--network doc301-net` connects the container to the custom network. No `-p 5432:5432` is needed: the API will reach the database over the private network on its **container port** 5432.
+
+### Step 3: Start the API using the database container name
+
+```bash
+docker run -d --name doc301-api --network doc301-net \
+  -p 8000:8000 \
+  -e "DATABASE_URL=postgresql://taskuser:${POSTGRES_PASSWORD}@doc301-db:5432/tasks" \
+  doc301-task-api:1.1
+```
+
+`DATABASE_URL` supplies a connection string at runtime rather than embedding credentials into the Dockerfile. `doc301-db` is the database hostname **inside this Docker network**. `localhost` inside `doc301-api` would refer to the API container itself, not to PostgreSQL. The API port is published to the host for testing; the database port is not.
+
+### Step 4: Verify DNS, connectivity, and database-backed requests
+
+```bash
+docker exec doc301-api python -c "import socket; print(socket.gethostbyname('doc301-db'))"
+docker network inspect doc301-net
+docker port doc301-db
+curl -fsS http://localhost:8000/health
+curl -i -X POST http://localhost:8000/tasks -H 'Content-Type: application/json' -d '{"title":"Learn Docker networking"}'
+curl -fsS http://localhost:8000/tasks
+```
+
+DNS should resolve to an internal container IP. Do not copy that IP into configuration because it can change. `docker port doc301-db` should show no mapping. The POST should return HTTP **201** and an ID; GET should return the new task. These checks prove both network connectivity and real database writes.
+
+### Step 5: Diagnose and clean up
+
+If the API exits, inspect `docker logs doc301-api` and `docker network inspect doc301-net`. A DNS error suggests a wrong hostname or network membership. `connection refused` suggests the destination is not accepting connections. An authentication error suggests incorrect database credentials. Wait for database readiness before starting the API.
+
+```bash
+docker rm -f doc301-api doc301-db
+docker network rm doc301-net
+unset POSTGRES_PASSWORD
+docker volume inspect doc301-net-pgdata
+```
+
+The named volume should remain. Include a simple network diagram in your README: `host -> API:8000 -> doc301-net -> doc301-db:5432 -> named volume`.
+
+## Acceptance criteria to verify
+
+- [ ] API creates and lists a task stored in PostgreSQL.
+- [ ] `doc301-db` resolves inside the user-defined network.
+- [ ] No host binding exists for database port 5432.
+- [ ] Containers can be removed without deleting the named volume.
+
+## Constraints from the project
+
+- Use the Project 3 image or its equivalent.
+- Do not hard-code credentials into the Dockerfile.
+- Publish only the API port, not PostgreSQL.
+- Avoid using container IP addresses as permanent configuration.
+
+## Required deliverables
+
+- Network/container commands, configuration method, API request results, and a short network explanation.
+
+## Original reference solution, retained for comparison
+
 # Project 05: Connect Containers Using Docker Networks — Reference Solution
 
 **Course:** DOC-301 — Docker & Containerization  

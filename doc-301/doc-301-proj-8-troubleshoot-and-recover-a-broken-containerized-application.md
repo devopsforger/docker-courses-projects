@@ -1,84 +1,130 @@
-# Project 08: Troubleshoot and Recover a Broken Containerized Application — Reference Solution
+# Project 08: Troubleshoot and Recover a Broken Containerized Application — Detailed Reference Solution
 
 **Course:** DOC-301 — Docker & Containerization  
-**Audience:** Instructors and students reviewing their completed attempt  
-**Environment:** Docker Engine / Docker Desktop, POSIX shell examples unless stated otherwise
+**Source verification:** Paired against uploaded Project 08 requirements and uploaded original Project 08 reference solution.  
+**Scope:** Beginner-friendly Bash/POSIX-shell walkthrough; commands are illustrative until run on a Docker host.
 
-## What this solution demonstrates
+## What you are building
 
-Logs, inspect, exec, configuration diagnosis, dns, health, root cause and recovery. The steps below are one valid implementation, not the only acceptable answer. Verify Docker and Compose versions in your own environment and never paste real secrets into submitted logs.
+You are on call. A teammate hands you a broken Compose deployment. Users cannot create tasks, and one or more services are unhealthy or restarting. Restore service without deleting customer data.
 
-# Shared Task API reference application
+## Requirement-by-requirement coverage
 
-Projects 2–8 use the same small Python/FastAPI application. The instructor supplies the following files as starter material; students are not assessed on writing Python. This reference implementation is reproduced here so the solutions can be followed independently. Use Python 3.12 and the dependency versions below as a tested baseline; update and re-test dependency versions regularly.
+| # | Published requirement | Where it is demonstrated |
+|---|---|---|
+| 1 | Start from the instructor-supplied broken Compose configuration and a pre-existing database volume. | Guided implementation / investigation below; see verification checklist |
+| 2 | Identify at least four independent faults, including a bad database hostname, an incorrect API port mapping, a failing healthcheck, and an invalid database credential. | Guided implementation / investigation below; see verification checklist |
+| 3 | Gather evidence using `docker compose ps`, `logs`, `docker inspect`, `docker exec`, and network inspection. | Guided implementation / investigation below; see verification checklist |
+| 4 | Correct the configuration without deleting the database volume. | Guided implementation / investigation below; see verification checklist |
+| 5 | Demonstrate healthy services and successful task creation/retrieval. | Guided implementation / investigation below; see verification checklist |
+| 6 | Write an incident report listing symptoms, root causes, fixes, verification, and prevention. | Guided implementation / investigation below; see verification checklist |
 
-**`requirements.txt`**
+## Guided investigation and recovery
 
-```text
-fastapi==0.115.12
-uvicorn==0.34.2
-psycopg[binary]==3.2.6
+**Assessment boundary:** Start with the instructor's *broken* Compose deployment and the existing database volume. Do not use the working configuration as a replacement or erase data. The instructor setup guide is separate, under `instructor-setup/`, and should not be given to students before the exercise. This reference walkthrough names the four required faults because it is intended for review **after** an attempt.
+
+### Step 1: Capture evidence before changing anything
+
+```bash
+docker compose config --quiet
+docker compose up -d --build || true
+docker compose ps -a
+docker compose logs --tail=100 db api
+docker network ls
 ```
 
-**`app.py`**
+`config --quiet` checks YAML and interpolation without exposing expanded credentials. `up` attempts startup; `|| true` allows the investigation to continue if Compose returns an error. `ps -a` includes failed and stopped containers. Logs reveal startup and connection errors. Save redacted output and the original broken `compose.yaml` before editing.
 
-```python
-import os
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-import psycopg
+### Step 2: Diagnose the failing database healthcheck
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    if DATABASE_URL:
-        with psycopg.connect(DATABASE_URL) as conn:
-            conn.execute("CREATE TABLE IF NOT EXISTS tasks (id SERIAL PRIMARY KEY, title TEXT NOT NULL)")
-            conn.commit()
-    yield
-
-app = FastAPI(lifespan=lifespan)
-
-class TaskIn(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-@app.get("/tasks")
-def list_tasks():
-    if not DATABASE_URL:
-        return []
-    with psycopg.connect(DATABASE_URL) as conn:
-        rows = conn.execute("SELECT id, title FROM tasks ORDER BY id").fetchall()
-    return [{"id": r[0], "title": r[1]} for r in rows]
-
-@app.post("/tasks", status_code=201)
-def add_task(task: TaskIn):
-    if not DATABASE_URL:
-        raise HTTPException(503, "Database is not configured")
-    with psycopg.connect(DATABASE_URL) as conn:
-        row = conn.execute("INSERT INTO tasks (title) VALUES (%s) RETURNING id", (task.title,)).fetchone()
-        conn.commit()
-    return {"id": row[0], "title": task.title}
+```bash
+DB_CID=$(docker compose ps -q db)
+docker inspect "$DB_CID" --format '{{json .State.Health}}'
+docker compose logs --tail=50 db
 ```
 
-**Notes:** `/health` reports process health, not database readiness. For Projects 5–8, successful `GET /tasks` is the database-connectivity check. On startup, a configured but unavailable database causes the API to exit; Compose will handle ordering and restart behavior as described later. `DATABASE_URL` must never be hard-coded into an image. The `POST /tasks` endpoint is available only when PostgreSQL is configured.
-## Instructor setup (do not reveal before assessment)
+The seeded healthcheck refers to the nonexistent host `does-not-exist`. Its failure makes the `db` service unhealthy and blocks the API's `depends_on: condition: service_healthy` startup gate. Restore:
 
-Start with the functioning Project 6 app, Dockerfile and Compose file. Create a task named `existing-record` and verify it appears in `GET /tasks`. Keep the database volume. Save a working copy of `compose.yaml` as `compose.reference.yaml` outside the student's starter folder.
+```yaml
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskuser -d tasks"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+```
 
-For the exercise, deliberately introduce **four independent faults** in the Compose configuration:
+Recreate and inspect: `docker compose up -d --force-recreate`, followed by `docker compose ps -a`. Fixing one problem may expose the next.
 
-1. **Incorrect API port mapping:** change `"8000:8000"` to `"8000:8001"`.
-2. **Wrong database hostname:** change the `DATABASE_URL` host from `db` to `database` (without renaming the actual `db` service).
-3. **Invalid database password:** replace the password in `DATABASE_URL` with `wrongpassword` while leaving the database's initialized password unchanged.
-4. **Broken DB healthcheck:** change the `pg_isready` command to `pg_isready -h does-not-exist -U taskuser -d tasks`.
+### Step 3: Diagnose the wrong database hostname
 
-**Important sequencing:** With the broken database healthcheck, `depends_on: condition: service_healthy` prevents API startup. This is intentional. Once that fault is corrected, the hostname and password faults will become visible. The wrong port mapping remains independently observable. Students must not remove the volume or replace the database to pass the exercise.
+The broken `DATABASE_URL` uses `database`, but the actual Compose service is named `db`. On the Compose network, service names provide DNS records. A missing name produces a resolution error, which differs from a refused connection or bad password.
+
+```bash
+docker compose ps -a
+docker compose logs --tail=100 api
+docker network ls
+docker compose exec db getent hosts db
+```
+
+If `getent` is unavailable, inspect the Compose network with `docker network inspect NETWORK_NAME`, using the actual name from `docker network ls`. Restore the connection host to `@db:5432/tasks`.
+
+### Step 4: Diagnose the invalid database password
+
+Once DNS resolves, the seeded wrong password causes PostgreSQL authentication to fail. The database's true credentials are the ones used when the existing volume was **first initialized**. Changing `POSTGRES_PASSWORD` in Compose does not reset an existing database user password. Restore the correct password in the API's connection URL, using the instructor-provided local value without printing it in the incident report. Recreate the API and inspect its logs. Never delete the volume to hide an authentication mismatch.
+
+### Step 5: Correct the incorrect API port mapping
+
+The seeded mapping is `"8000:8001"`, which directs host port 8000 to container port 8001. Uvicorn listens on **container port 8000**. Correct the Compose `api.ports` entry:
+
+```yaml
+    ports:
+      - "8000:8000"
+```
+
+Verify with `docker compose port api 8000`. A published-port error is different from a failed database connection; investigate them separately.
+
+### Step 6: Verify full recovery and data preservation
+
+```bash
+docker compose config --quiet
+docker compose up -d --build --force-recreate
+docker compose ps
+curl -fsS http://localhost:8000/health
+curl -fsS http://localhost:8000/tasks
+curl -i -X POST http://localhost:8000/tasks -H 'Content-Type: application/json' -d '{"title":"recovered-service"}'
+curl -fsS http://localhost:8000/tasks
+```
+
+Both services should operate normally, `GET /tasks` should still contain the instructor's **pre-existing task**, and POST should create a new task with HTTP 201. Verify `db` has no published host port using `docker compose ps` or `docker compose port db 5432`. A healthy API `/health` response alone does not prove database functionality; use the task endpoints.
+
+### Step 7: Write the incident report
+
+Include the observed impact, timeline, initial evidence, **four separate root causes**, corrective action for each, verification of restored functionality, proof the existing task survived, and prevention ideas. Examples of prevention include automated Compose validation, database readiness checks, deployment smoke tests, and secure credential handling. Redact passwords, connection URLs containing passwords, and tokens.
+
+### Cleanup
+
+Use `docker compose down` only after capturing evidence. Do **not** use `down -v`. Keep the named volume for assessment and review.
+
+## Acceptance criteria to verify
+
+- [ ] All four seeded faults are identified with supporting evidence.
+- [ ] API health and task endpoints respond.
+- [ ] A pre-existing task remains available.
+- [ ] Database has no published host port.
+- [ ] Incident report explains why each fix works.
+
+## Constraints from the project
+
+- Do not use `docker compose down -v` or delete volumes to make errors disappear.
+- Preserve existing database records.
+- Do not modify application source unless the supplied application is itself defective.
+- Record evidence before making changes.
+
+## Required deliverables
+
+- Corrected Compose file, investigation command transcript, API results, and incident report.
+
+## Original reference solution, retained for comparison
 
 ## Student investigation walkthrough
 
