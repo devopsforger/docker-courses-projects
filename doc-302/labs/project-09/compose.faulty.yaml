@@ -1,0 +1,13 @@
+# Intentionally insecure/broken: isolated lab only.
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.faulty
+    privileged: true
+    user: "0:0"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://taskforge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@missing-db:5432/taskforge
+  db:
+    ports:
+      - "127.0.0.1:55432:5432"

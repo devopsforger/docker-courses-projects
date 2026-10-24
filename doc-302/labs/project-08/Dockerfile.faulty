@@ -1,0 +1,11 @@
+# Intentionally faulty lab Dockerfile: TaskForge source remains unchanged.
+FROM python:3.13-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && useradd -r -u 10001 appuser
+COPY main.py .
+USER 10001
+EXPOSE 8000
+# Deliberately invalid port: healthcheck reports unhealthy even if API serves requests.
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health')" || exit 1
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

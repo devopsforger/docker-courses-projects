@@ -1,0 +1,9 @@
+# Intentionally faulty: apply ONLY in an isolated training lab.
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.faulty
+    cpus: 0.05
+    environment:
+      DATABASE_URL: postgresql+psycopg2://taskforge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@missing-db:5432/taskforge
